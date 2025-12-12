@@ -1,3 +1,5 @@
+![LinuxJanitor Banner](https://raw.githubusercontent.com/ind4skylivey/LinuxJanitor/main/assets/janitorlinux!%20v2.png)
+
 # 🧹 LinuxJanitor
 
 ### Because your disk space is precious (and `node_modules` is a black hole).
