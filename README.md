@@ -48,7 +48,20 @@ Runs with safety scissors. Only touches temporary caches that are guaranteed to 
 
 ## 🚀 Usage
 
-Stop reading and start cleaning.
+### ⚡ One-Command Install (The "I'm lazy" method)
+Download, install to `~/.local/bin`, and make it executable automatically:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ind4skylivey/LinuxJanitor/main/install.sh | bash
+```
+
+Then you can just run it from anywhere:
+```bash
+system-cleanup-enhanced.sh
+```
+
+### 🐢 Manual Install
+Old school? I respect that.
 
 ```bash
 # 1. Download the script (or clone this repo)
