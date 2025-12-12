@@ -534,6 +534,37 @@ run_cleanup_logic() {
 # MENUS & ARGUMENTS
 ################################################################################
 
+show_main_menu() {
+    clear
+    print_header "╔═══════════════════════════════════════════════════════════════╗"
+    print_header "║   System Cleanup Enhanced v${SCRIPT_VERSION} - Power User Edition        ║"
+    print_header "║                      Main Menu                                ║"
+    print_header "╚═══════════════════════════════════════════════════════════════╝"
+    echo
+    echo -e "${CYAN}Select a cleanup mode:${NC}"
+    echo
+    echo -e "  ${BOLD}1)${NC} ${GREEN}Standard Cleanup${NC} (Recommended - Pkg cache, Trash, Journals)"
+    echo -e "  ${BOLD}2)${NC} ${BLUE}Safe Cleanup${NC}     (Temp files, Browser cache only)"
+    echo -e "  ${BOLD}3)${NC} ${RED}Aggressive Cleanup${NC} (Dev junk, Docker, Old Kernels)"
+    echo -e "  ${BOLD}4)${NC} ${YELLOW}Interactive Mode${NC}   (Ask for every step)"
+    echo -e "  ${BOLD}5)${NC} ${PURPLE}Dry Run${NC}            (Simulation only - Aggressive check)"
+    echo -e "  ${BOLD}6)${NC} Exit"
+    echo
+    
+    local choice
+    read -p "$(echo -e ${YELLOW}Select option [1-6]:${NC} )" choice
+    
+    case $choice in
+        1) CLEANUP_LEVEL="standard"; INTERACTIVE_MODE=false ;;
+        2) CLEANUP_LEVEL="safe"; INTERACTIVE_MODE=false ;;
+        3) CLEANUP_LEVEL="aggressive"; INTERACTIVE_MODE=false ;;
+        4) CLEANUP_LEVEL="standard"; INTERACTIVE_MODE=true ;;
+        5) DRY_RUN_MODE=true; CLEANUP_LEVEL="aggressive" ;;
+        6) echo "Bye!"; exit 0 ;;
+        *) echo "Invalid option"; sleep 1; show_main_menu ;;
+    esac
+}
+
 show_help() {
     cat << EOF
 ${BOLD}${CYAN}System Cleanup Enhanced v${SCRIPT_VERSION} - Power User Edition${NC}
@@ -572,7 +603,12 @@ parse_arguments() {
 }
 
 main() {
-    parse_arguments "$@"
+    # If no arguments provided, show interactive menu
+    if [ $# -eq 0 ]; then
+        show_main_menu
+    else
+        parse_arguments "$@"
+    fi
     
     # Initialize
     initialize_directories
