@@ -59,6 +59,7 @@ Then you can just run it from anywhere:
 ```bash
 system-cleanup-enhanced.sh
 ```
+*(Running it without arguments opens the Interactive Menu)*
 
 ### 🐢 Manual Install
 Old school? I respect that.
@@ -71,19 +72,21 @@ cd LinuxJanitor
 # 2. Give it power
 chmod +x system-cleanup-enhanced.sh
 
-# 3. RUN IT
+# 3. RUN IT (Opens Menu)
 ./system-cleanup-enhanced.sh
 ```
 
-### Flags for the lazy:
+### 🤖 CLI Arguments (For Automation & Speed)
+Skip the menu and just get things done:
 
 | Flag | What it does |
 |------|--------------|
-| `-i` | **Interactive Mode.** Asks you for permission before every single step. For control freaks. |
-| `-y` | **Yes Mode.** Don't ask questions, just do it. (Respects config). |
-| `-d` | **Dry Run.** Pretend to clean so you can see how much space you *would* have saved. |
-| `--aggressive` | **The fun mode.** See above. |
 | `--safe` | **The boring mode.** See above. |
+| `--standard` | **The default.** Standard cleanup. |
+| `--aggressive` | **The fun mode.** See above. |
+| `-i` | **Interactive Steps.** Asks for permission before *every* single step. |
+| `-y` | **Yes Mode.** Automatic mode. Great for cron jobs. |
+| `-d` | **Dry Run.** Pretend to clean. See how much space you *would* save. |
 
 ---
 
