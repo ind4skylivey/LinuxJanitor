@@ -54,6 +54,26 @@ readonly UNDERLINE='\033[4m'
 readonly NC='\033[0m'
 
 ################################################################################
+# PROTECTED CACHE DIRECTORIES (never deleted by any cleanup level)
+################################################################################
+
+readonly -a PROTECTED_CACHE_DIRS=(
+    "nvim"
+    "helix"
+    "zellij"
+    "vim"
+    "emacs"
+    "kitty"
+    "alacritty"
+    "tmux"
+    "zen"
+    "fish"
+    "mesa_shader_cache"
+    "fontconfig"
+    "starship"
+)
+
+################################################################################
 # GLOBAL VARIABLES
 ################################################################################
 
@@ -486,8 +506,13 @@ clean_docker_enhanced() {
 }
 
 clean_common_caches() {
-    # Combined function for standard caches to run in parallel
-    [ "${CONFIG[enable_user_cache]}" = "true" ] && rm -rf ~/.cache/* 2>/dev/null
+    if [ "${CONFIG[enable_user_cache]}" = "true" ]; then
+        local exclude_args=()
+        for dir in "${PROTECTED_CACHE_DIRS[@]}"; do
+            exclude_args+=(-not -name "$dir")
+        done
+        find "$HOME/.cache" -mindepth 1 -maxdepth 1 "${exclude_args[@]}" -exec rm -rf {} + 2>/dev/null
+    fi
     [ "${CONFIG[enable_thumbnails]}" = "true" ] && rm -rf ~/.thumbnails/* ~/.cache/thumbnails/* 2>/dev/null
     [ "${CONFIG[enable_trash]}" = "true" ] && rm -rf ~/.local/share/Trash/* 2>/dev/null
     return 0
