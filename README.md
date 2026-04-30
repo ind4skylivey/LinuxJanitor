@@ -6,7 +6,7 @@
 
 **LinuxJanitor** is the Bash script your grandmother warned you about. It's an automated, multi-distro cleaning utility that goes into the dark corners of your filesystem and kicks out the dust bunnies (and the 40GB of Docker images you haven't used since 2021).
 
-> **Current Version:** 2.5 "Power User Edition" ⚡
+> **Current Version:** 2.7 "Power User Edition" ⚡
 
 ---
 
@@ -89,6 +89,8 @@ Skip the menu and just get things done:
 | `-i` | **Interactive Steps.** Asks for permission before *every* single step. |
 | `-y` | **Yes Mode.** Automatic mode. Great for cron jobs. |
 | `-d` | **Dry Run.** Pretend to clean. See how much space you *would* save. |
+| `-u, --user USER` | Run cleanup for a specific user (useful for system admins). |
+| `-a, --all-users` | Clean ALL users on the system (asks confirmation per user). |
 
 ---
 
@@ -96,6 +98,60 @@ Skip the menu and just get things done:
 
 The script creates a config file at `~/.config/system-cleanup/config.conf`.
 You can edit it manually if you want to permanently enable the "Kernel Assassin" or disable "Browser Cleanup" because you like keeping 4GB of cookies.
+
+---
+
+## 👤 Running for Other Users
+
+You can clean up other users' caches without switching accounts:
+
+```bash
+# Clean another user's cache
+./system-cleanup-enhanced.sh --user john --standard
+
+# Clean root's cache (if you dare)
+sudo ./system-cleanup-enhanced.sh --user root --aggressive
+
+# Dry run for another user
+./system-cleanup-enhanced.sh -u mary --dry-run
+
+# Clean ALL users on the system (v2.7)
+./system-cleanup-enhanced.sh --all-users
+```
+
+---
+
+## 🔥 v2.7 New Features
+
+### 📄 HTML Report
+Generate beautiful HTML reports after cleanup:
+- Visual dashboard with charts and icons
+- Space freed, mode, distro summary
+- Cleanup details breakdown
+- Reports saved to `~/.config/system-cleanup/reports/`
+
+### 👥 --all-users Mode (v2.7)
+Clean all users on the system with confirmation per user:
+```bash
+./system-cleanup-enhanced.sh --all-users         # Interactive
+./system-cleanup-enhanced.sh -a --dry-run        # Preview only
+./system-cleanup-enhanced.sh -a -y               # Auto confirm all
+```
+- Excludes system users (root, daemon, mysql, etc.)
+- Asks confirmation for each user before cleaning
+
+### 🐳 Podman Support (v2.7)
+Now supports both Podman and Docker:
+- Auto-detects available container runtime
+- If both detected, asks which to use
+- Works seamlessly with `--aggressive` mode
+
+**How it works:**
+- Uses `getent passwd` to resolve the correct home directory
+- All user-specific paths (`.cache`, `.config`, etc.) are automatically redirected
+- Perfect for system admins managing multiple accounts
+
+**Note:** When using `--user`, the script runs with YOUR permissions. Use `sudo` if you need to access other users' files.
 
 ---
 
