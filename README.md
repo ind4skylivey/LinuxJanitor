@@ -6,7 +6,7 @@
 
 **LinuxJanitor** is the Bash script your grandmother warned you about. It's an automated, multi-distro cleaning utility that goes into the dark corners of your filesystem and kicks out the dust bunnies (and the 40GB of Docker images you haven't used since 2021).
 
-> **Current Version:** 2.7 "Power User Edition" ⚡
+> **Current Version:** 3.0 "Power User Edition" ⚡
 
 ---
 
@@ -35,7 +35,7 @@ Runs with safety scissors. Only touches temporary caches that are guaranteed to 
 
 ### 2. 🧹 `--standard` (The "Regular human" mode)
 **Default.** The sweet spot. Cleans what needs to be cleaned without breaking your dev environment.
-- Cleans: Everything in Safe + Package Manager Cache (apt/pacman/dnf), Trash, Journal logs (keeps last 2 weeks).
+- Cleans: Everything in Safe + Package Manager Cache (apt/pacman/dnf), Trash, Journal logs (keeps last 2 weeks), Snap, Flatpak, Telegram, JS managers, paccache, debtap, coredumps, fwupd, /tmp.
 - **Risk Level:** 2/10. Standard maintenance.
 
 ### 3. 💀 `--aggressive` (The "I choose violence" mode)
@@ -44,6 +44,8 @@ Runs with safety scissors. Only touches temporary caches that are guaranteed to 
 - **Docker:** Prunes images AND **Volumes** (optional confirmation).
 - **Kernel Assassin:** Hunts down old kernels and removes them (Debian/Fedora).
 - **Electron Bloat:** Cleans heavy caches from Discord, Slack, Spotify, VS Code workspace history.
+- **/var/log:** Removes old compressed and rotated log files, truncates large logs.
+- **Debtap & pkgfile:** Cleans Arch-specific conversion and file search caches.
 - **Risk Level:** 8/10. Don't come crying if you have to re-download the internet.
 
 ---
@@ -118,6 +120,62 @@ sudo ./system-cleanup-enhanced.sh --user root --aggressive
 # Clean ALL users on the system (v2.7)
 ./system-cleanup-enhanced.sh --all-users
 ```
+
+---
+
+## 🔥 v3.0 New Features
+
+### 📦 Snap & Flatpak Cleanup
+- Removes snap download cache and disabled snap revisions
+- Cleans unused Flatpak runtimes and apps via `flatpak uninstall --unused`
+
+### 💬 Telegram Cache Cleanup
+- Cleans Telegram Desktop cache, emoji, media cache, and temp files
+- Located at `~/.local/share/TelegramDesktop/tdata/`
+
+### 💥 Core Dump & Crash Report Cleanup
+- Removes systemd coredumps from `/var/lib/systemd/coredump`
+- Cleans Ubuntu/Debian apport crash reports from `/var/crash`
+
+### 📋 /var/log Old File Cleanup (Aggressive only)
+- Removes compressed `.gz` and `.old` log files older than 7 days
+- Removes rotated log files (`*.1`, `*.2`, etc.) older than 7 days
+- Truncates large log files (>50MB) instead of deleting
+
+### 🗂️ /tmp & /var/tmp Cleanup
+- Cleans temp files older than 1 day (safe for running processes)
+
+### 🟢 pnpm/yarn/bun Cache Cleanup
+- `pnpm store prune` for pnpm store
+- `yarn cache clean` for yarn cache
+- `bun pm cache rm` for bun install cache
+
+### 🏗️ Debtap & pkgfile Cache (Arch only)
+- Cleans `/var/cache/debtap/` for debtap users
+- Cleans `/var/cache/pkgfile/` for pkgfile users
+
+### ⚡ paccache Support (Smart Pacman Cache)
+- Uses `paccache` (from pacman-contrib) instead of `pacman -Sc` when available
+- Configurable: keeps N versions (default: 2) via `paccache_keep` config
+- Shows before/after cache size comparison
+
+### 🔧 fwupd Cache Cleanup
+- Cleans `/var/cache/fwupd/` firmware update cache
+
+### 💾 Config Persistence
+- Settings are automatically saved to disk after each run
+- Loaded on next run — your preferences survive across sessions
+- Config file: `~/.config/system-cleanup/config.conf`
+
+### 🧹 Self-Maintenance
+- Automatically cleans old HTML reports (>30 days)
+- Cleans old log files (>30 days)
+- Cleans old backup files (>90 days)
+
+### 📊 Improved HTML Report
+- Real data instead of placeholder values
+- Dynamic donut chart percentage based on actual space freed vs disk size
+- Accurate cache size reporting in details table
 
 ---
 
