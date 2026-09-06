@@ -1,0 +1,6 @@
+root:x:0:0:root:/root:/bin/bash
+daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin
+sync:x:4:65534:sync:/bin:/bin/sync
+alice:x:1001:1001:Alice:/tmp/alice-home:/bin/bash
+bob:x:1002:1002:Bob:/tmp/bob-home:/bin/bash
+svc:x:999:999:Service:/var/lib/svc:/usr/sbin/nologin

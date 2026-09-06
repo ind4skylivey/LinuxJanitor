@@ -100,17 +100,18 @@ TOTAL_FREED=0
 FREED_LOG=""
 PACKAGES_REMOVED=0
 INTERACTIVE_MODE=false
+AUTO_YES=false
 DRY_RUN_MODE=false
 VERBOSE_MODE=false
 ENABLE_BACKUP=true
-PARALLEL_EXECUTION=true
+PARALLEL_EXECUTION=false
 CLEANUP_LEVEL="standard" # Default level: safe, standard, aggressive
 
 ################################################################################
 # CONFIGURATION DEFAULTS
 ################################################################################
 
-declare -A CONFIG=(
+declare -g -A CONFIG=(
     [journal_retention]="2weeks"
     # Standard
     [enable_package_cache]="true"
@@ -180,7 +181,10 @@ show_spinner() {
         sleep $delay
     done
     tput cnorm
+    wait $pid
+    local exit_code=$?
     printf "    \r"
+    return $exit_code
 }
 
 command_exists() { command -v "$1" >/dev/null 2>&1; }
@@ -222,7 +226,7 @@ readonly -a EXCLUDED_USERS=(
 # Get list of valid system users (real human users only)
 get_system_users() {
     local users=()
-    while IFS=: read -r username home _; do
+    while IFS=: read -r username _ _ _ _ home shell; do
         # Skip excluded users
         local skip=false
         for excluded in "${EXCLUDED_USERS[@]}"; do
@@ -232,56 +236,45 @@ get_system_users() {
             fi
         done
         [ "$skip" = true ] && continue
-        
+
         # Skip users without valid home or with nologin/false
         if [ -z "$home" ] || [ ! -d "$home" ]; then
             continue
         fi
-        
-        # Get shell
-        local shell
-        shell=$(getent passwd "$username" | cut -d: -f7)
-        if [ "$shell" = "/bin/false" ] || [ "$shell" = "/usr/bin/nologin" ]; then
+
+        if [ "$shell" = "/bin/false" ] || [ "$shell" = "/usr/sbin/nologin" ] || [ "$shell" = "/usr/bin/nologin" ]; then
             continue
         fi
-        
+
         users+=("$username")
     done < <(getent passwd)
-    
+
     printf '%s\n' "${users[@]}"
 }
 
 # Run cleanup for a single user (used by --all-users mode)
 cleanup_single_user() {
     local user="$1"
-    local save_user=$TARGET_USER
-    local save_home=$TARGET_HOME
-    
+
     TARGET_USER="$user"
     TARGET_HOME=$(get_user_home "$user")
-    
-    print_status "Processing user: $user"
-    
-    # Set config directories based on target user
+
+    if [ -z "$TARGET_HOME" ] || [ ! -d "$TARGET_HOME" ]; then
+        print_warning "Skipping $user: no valid home directory"
+        return 1
+    fi
+
     CONFIG_DIR="$TARGET_HOME/.config/system-cleanup"
     CONFIG_FILE="$CONFIG_DIR/config.conf"
     LOG_DIR="$CONFIG_DIR/logs"
     BACKUP_DIR="$CONFIG_DIR/backups"
     REPORT_DIR="$CONFIG_DIR/reports"
-    
-    # Initialize directories
+
     initialize_directories
-    
-    # Run cleanup for this user (simulated if DRY_RUN_MODE)
-    clean_common_caches
-    clean_electron_apps
-    clean_dev_tools
-    
+
+    print_status "Processing user: $user (home: $TARGET_HOME)"
+    run_user_cleanup_logic
     print_success "Cleanup completed for: $user"
-    
-    # Restore original user
-    TARGET_USER=$save_user
-    TARGET_HOME=$save_home
 }
 
 # Process all users (--all-users mode)
@@ -302,10 +295,13 @@ process_all_users() {
     print_status "Found $user_count users to process"
     
     echo "$users" | while read -r user; do
+        [ -z "$user" ] && continue
         print_status "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         print_status "User: $user"
-        
-        if ask_yes_no "Clean cache for user '$user'?" "y"; then
+
+        if [ "$DRY_RUN_MODE" = true ]; then
+            cleanup_single_user "$user"
+        elif ask_yes_no "Clean cache for user '$user'?" "y"; then
             cleanup_single_user "$user"
         else
             print_status "Skipped: $user"
@@ -348,9 +344,8 @@ ask_yes_no() {
     local question=$1
     local default=${2:-"n"}
     [ "$DRY_RUN_MODE" = true ] && return 1
+    [ "$AUTO_YES" = true ] && return 0
     if [ "$INTERACTIVE_MODE" = false ]; then
-        # Check if we are in aggressive mode, some things might still need caution or force flag
-        # For now, auto mode assumes yes if configured to run
         [ "$default" = "y" ] && return 0 || return 1
     fi
     
@@ -369,20 +364,52 @@ ask_yes_no() {
 
 initialize_directories() { mkdir -p "$CONFIG_DIR" "$LOG_DIR" "$BACKUP_DIR" "$REPORT_DIR" 2>/dev/null || true; }
 
+trim_whitespace() {
+    local value="$1"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    printf '%s' "$value"
+}
+
 load_config() {
     if [ -f "$CONFIG_FILE" ]; then
         print_status "Loading saved configuration from $CONFIG_FILE"
         while IFS='=' read -r key value; do
             [[ "$key" =~ ^[[:space:]]*# ]] && continue
             [[ -z "$key" ]] && continue
-            key=$(echo "$key" | xargs)
-            value=$(echo "$value" | xargs)
+            key=$(trim_whitespace "$key")
+            value=$(trim_whitespace "$value")
             if [ -n "$key" ] && [ -n "$value" ]; then
                 CONFIG[$key]="$value"
             fi
         done < "$CONFIG_FILE"
         print_success "Configuration loaded"
     fi
+    apply_config_globals
+}
+
+apply_config_globals() {
+    if [[ "${CONFIG["paccache_keep"]}" =~ ^[0-9]+$ ]]; then
+        :
+    else
+        CONFIG["paccache_keep"]="2"
+    fi
+
+    if [ "${CONFIG["parallel_execution"]}" = "true" ]; then
+        PARALLEL_EXECUTION=true
+    else
+        PARALLEL_EXECUTION=false
+    fi
+
+    if [ "${CONFIG["backup_enabled"]}" = "true" ]; then
+        ENABLE_BACKUP=true
+    else
+        ENABLE_BACKUP=false
+    fi
+}
+
+escape_for_sed() {
+    printf '%s' "$1" | sed -e 's/[&|]/\\&/g' -e 's|/|\\/|g'
 }
 
 save_config() {
@@ -405,88 +432,88 @@ configure_cleanup_level() {
     
     case $CLEANUP_LEVEL in
         "safe")
-            CONFIG[enable_package_cache]="false"
-            CONFIG[enable_orphaned_packages]="false"
-            CONFIG[enable_journal_cleanup]="false"
-            CONFIG[enable_user_cache]="true"
-            CONFIG[enable_browser_cache]="true"
-            CONFIG[enable_thumbnails]="true"
-            CONFIG[enable_trash]="true"
-            CONFIG[enable_pip_cache]="false"
-            CONFIG[enable_npm_cache]="false"
-            CONFIG[enable_dev_tools]="false"
-            CONFIG[enable_electron_apps]="true" # Safe to clean caches
-            CONFIG[enable_docker_cleanup]="false"
-            CONFIG[enable_docker_volumes]="false"
-            CONFIG[enable_old_kernels]="false"
-            CONFIG[enable_var_log]="false"
-            CONFIG[enable_snap]="false"
-            CONFIG[enable_flatpak]="false"
-            CONFIG[enable_telegram]="false"
-            CONFIG[enable_temp_dirs]="false"
-            CONFIG[enable_coredumps]="false"
-            CONFIG[enable_fwupd]="false"
-            CONFIG[enable_js_managers]="false"
-            CONFIG[enable_paccache]="false"
-            CONFIG[enable_debtap]="false"
-            CONFIG[enable_pkgfile]="false"
+            CONFIG["enable_package_cache"]="false"
+            CONFIG["enable_orphaned_packages"]="false"
+            CONFIG["enable_journal_cleanup"]="false"
+            CONFIG["enable_user_cache"]="true"
+            CONFIG["enable_browser_cache"]="true"
+            CONFIG["enable_thumbnails"]="true"
+            CONFIG["enable_trash"]="true"
+            CONFIG["enable_pip_cache"]="false"
+            CONFIG["enable_npm_cache"]="false"
+            CONFIG["enable_dev_tools"]="false"
+            CONFIG["enable_electron_apps"]="true" # Safe to clean caches
+            CONFIG["enable_docker_cleanup"]="false"
+            CONFIG["enable_docker_volumes"]="false"
+            CONFIG["enable_old_kernels"]="false"
+            CONFIG["enable_var_log"]="false"
+            CONFIG["enable_snap"]="false"
+            CONFIG["enable_flatpak"]="false"
+            CONFIG["enable_telegram"]="false"
+            CONFIG["enable_temp_dirs"]="false"
+            CONFIG["enable_coredumps"]="false"
+            CONFIG["enable_fwupd"]="false"
+            CONFIG["enable_js_managers"]="false"
+            CONFIG["enable_paccache"]="false"
+            CONFIG["enable_debtap"]="false"
+            CONFIG["enable_pkgfile"]="false"
             ;; 
         "standard")
-            CONFIG[enable_package_cache]="true"
-            CONFIG[enable_orphaned_packages]="true"
-            CONFIG[enable_journal_cleanup]="true"
-            CONFIG[enable_user_cache]="true"
-            CONFIG[enable_browser_cache]="true"
-            CONFIG[enable_thumbnails]="true"
-            CONFIG[enable_trash]="true"
-            CONFIG[enable_pip_cache]="true"
-            CONFIG[enable_npm_cache]="true"
-            CONFIG[enable_dev_tools]="false" # Dev tools usually manual in standard
-            CONFIG[enable_electron_apps]="true"
-            CONFIG[enable_docker_cleanup]="false"
-            CONFIG[enable_docker_volumes]="false"
-            CONFIG[enable_old_kernels]="false"
-            CONFIG[enable_var_log]="false"
-            CONFIG[enable_snap]="true"
-            CONFIG[enable_flatpak]="true"
-            CONFIG[enable_telegram]="true"
-            CONFIG[enable_temp_dirs]="true"
-            CONFIG[enable_coredumps]="true"
-            CONFIG[enable_fwupd]="true"
-            CONFIG[enable_var_log]="false"
-            CONFIG[enable_js_managers]="true"
-            CONFIG[enable_paccache]="true"
-            CONFIG[enable_debtap]="true"
-            CONFIG[enable_pkgfile]="false"
+            CONFIG["enable_package_cache"]="true"
+            CONFIG["enable_orphaned_packages"]="true"
+            CONFIG["enable_journal_cleanup"]="true"
+            CONFIG["enable_user_cache"]="true"
+            CONFIG["enable_browser_cache"]="true"
+            CONFIG["enable_thumbnails"]="true"
+            CONFIG["enable_trash"]="true"
+            CONFIG["enable_pip_cache"]="true"
+            CONFIG["enable_npm_cache"]="true"
+            CONFIG["enable_dev_tools"]="false" # Dev tools usually manual in standard
+            CONFIG["enable_electron_apps"]="true"
+            CONFIG["enable_docker_cleanup"]="false"
+            CONFIG["enable_docker_volumes"]="false"
+            CONFIG["enable_old_kernels"]="false"
+            CONFIG["enable_var_log"]="false"
+            CONFIG["enable_snap"]="true"
+            CONFIG["enable_flatpak"]="true"
+            CONFIG["enable_telegram"]="true"
+            CONFIG["enable_temp_dirs"]="true"
+            CONFIG["enable_coredumps"]="true"
+            CONFIG["enable_fwupd"]="true"
+            CONFIG["enable_var_log"]="false"
+            CONFIG["enable_js_managers"]="true"
+            CONFIG["enable_paccache"]="true"
+            CONFIG["enable_debtap"]="true"
+            CONFIG["enable_pkgfile"]="false"
             ;; 
         "aggressive")
-            CONFIG[enable_package_cache]="true"
-            CONFIG[enable_orphaned_packages]="true"
-            CONFIG[enable_journal_cleanup]="true"
-            CONFIG[enable_user_cache]="true"
-            CONFIG[enable_browser_cache]="true"
-            CONFIG[enable_thumbnails]="true"
-            CONFIG[enable_trash]="true"
-            CONFIG[enable_pip_cache]="true"
-            CONFIG[enable_npm_cache]="true"
-            CONFIG[enable_dev_tools]="true"
-            CONFIG[enable_electron_apps]="true"
-            CONFIG[enable_docker_cleanup]="true"
-            CONFIG[enable_docker_volumes]="true" # Dangerous!
-            CONFIG[enable_old_kernels]="true"    # Dangerous!
-            CONFIG[journal_retention]="1d"       # Aggressive retention
-            CONFIG[enable_snap]="true"
-            CONFIG[enable_flatpak]="true"
-            CONFIG[enable_telegram]="true"
-            CONFIG[enable_temp_dirs]="true"
-            CONFIG[enable_coredumps]="true"
-            CONFIG[enable_fwupd]="true"
-            CONFIG[enable_var_log]="true"
-            CONFIG[enable_js_managers]="true"
-            CONFIG[enable_paccache]="true"
-            CONFIG[paccache_keep]="1"          # Aggressive: keep only current version
-            CONFIG[enable_debtap]="true"
-            CONFIG[enable_pkgfile]="true"
+            CONFIG["enable_package_cache"]="true"
+            CONFIG["enable_orphaned_packages"]="true"
+            CONFIG["enable_journal_cleanup"]="true"
+            CONFIG["enable_user_cache"]="true"
+            CONFIG["enable_browser_cache"]="true"
+            CONFIG["enable_thumbnails"]="true"
+            CONFIG["enable_trash"]="true"
+            CONFIG["enable_pip_cache"]="true"
+            CONFIG["enable_npm_cache"]="true"
+            CONFIG["enable_dev_tools"]="true"
+            CONFIG["enable_electron_apps"]="true"
+            CONFIG["enable_docker_cleanup"]="true"
+            CONFIG["enable_docker_volumes"]="true" # Dangerous!
+            CONFIG["enable_old_kernels"]="true"    # Dangerous!
+            CONFIG["journal_retention"]="1d"       # Aggressive retention
+            CONFIG["enable_snap"]="true"
+            CONFIG["enable_flatpak"]="true"
+            CONFIG["enable_telegram"]="true"
+            CONFIG["enable_temp_dirs"]="true"
+            CONFIG["enable_coredumps"]="true"
+            CONFIG["enable_fwupd"]="true"
+            CONFIG["enable_var_log"]="true"
+            CONFIG["enable_js_managers"]="true"
+            CONFIG["enable_paccache"]="true"
+            CONFIG["paccache_keep"]="1"          # Aggressive: keep only current version
+            CONFIG["enable_debtap"]="true"
+            CONFIG["enable_pkgfile"]="true"
             ;; 
     esac
 }
@@ -515,7 +542,7 @@ detect_distro() {
 ################################################################################
 
 create_backup() {
-    [ "${CONFIG[backup_enabled]}" != "true" ] && return 0
+    [ "${CONFIG["backup_enabled"]}" != "true" ] && return 0
     [ "$ENABLE_BACKUP" != true ] && return 0
     
     print_status "Creating package list backup..."
@@ -541,7 +568,7 @@ update_stats() { SPACE_AFTER=$(get_available_space_bytes); sum_all_freed; SPACE_
 
 # --- DEV TOOLS CLEANUP (NEW) ---
 clean_dev_tools() {
-    [ "${CONFIG[enable_dev_tools]}" != "true" ] && return 0
+    [ "${CONFIG["enable_dev_tools"]}" != "true" ] && return 0
     print_header "\n>>> Cleaning Development Tools"
     
     local freed_total=0
@@ -553,7 +580,7 @@ clean_dev_tools() {
         if [ "$DRY_RUN_MODE" = true ]; then
             print_status "[DRY RUN] Would clean Cargo registry ($size)"
         elif ask_yes_no "Clean Cargo registry ($size)? (Will re-download dependencies)" "n"; then
-            rm -rf "$TARGET_HOME/.cargo/registry/*"
+            rm -rf "$TARGET_HOME/.cargo/registry"/*
             freed_total=$((freed_total + ${size_bytes:-0}))
             print_success "Cargo registry cleaned"
         fi
@@ -581,7 +608,7 @@ clean_dev_tools() {
         if [ "$DRY_RUN_MODE" = true ]; then
              print_status "[DRY RUN] Would clean Gradle caches ($size)"
         elif ask_yes_no "Clean Gradle caches ($size)?" "n"; then
-            rm -rf "$TARGET_HOME/.gradle/caches/*"
+            rm -rf "$TARGET_HOME/.gradle/caches"/*
             freed_total=$((freed_total + ${size_bytes:-0}))
             print_success "Gradle caches cleaned"
         fi
@@ -594,7 +621,7 @@ clean_dev_tools() {
         if [ "$DRY_RUN_MODE" = true ]; then
              print_status "[DRY RUN] Would clean Maven repository ($size)"
         elif ask_yes_no "Clean Maven repository ($size)?" "n"; then
-            rm -rf "$TARGET_HOME/.m2/repository/*"
+            rm -rf "$TARGET_HOME/.m2/repository"/*
             freed_total=$((freed_total + ${size_bytes:-0}))
             print_success "Maven repository cleaned"
         fi
@@ -618,9 +645,84 @@ clean_dev_tools() {
     track_freed $freed_total
 }
 
+clean_browser_cache() {
+    [ "${CONFIG["enable_browser_cache"]}" != "true" ] && return 0
+    print_header "\n>>> Cleaning Browser Caches"
+
+    local -a browser_paths=(
+        "$TARGET_HOME/.cache/mozilla"
+        "$TARGET_HOME/.cache/chromium"
+        "$TARGET_HOME/.cache/google-chrome"
+        "$TARGET_HOME/.cache/BraveSoftware"
+        "$TARGET_HOME/.cache/opera"
+        "$TARGET_HOME/.cache/vivaldi"
+        "$TARGET_HOME/.cache/msedge"
+    )
+
+    local freed_total=0
+    for path in "${browser_paths[@]}"; do
+        if [ -d "$path" ]; then
+            local size=$(get_size_human "$path")
+            local size_bytes=$(du -sb "$path" 2>/dev/null | cut -f1)
+            if [ "$DRY_RUN_MODE" = true ]; then
+                print_status "[DRY RUN] Would clean browser cache ($path, $size)"
+            else
+                find "$path" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null
+                freed_total=$((freed_total + ${size_bytes:-0}))
+                print_success "Cleaned browser cache ($path, $size)"
+            fi
+        fi
+    done
+    track_freed $freed_total
+}
+
+clean_pip_cache() {
+    [ "${CONFIG["enable_pip_cache"]}" != "true" ] && return 0
+    print_header "\n>>> Cleaning pip Cache"
+
+    if command_exists pip; then
+        if [ "$DRY_RUN_MODE" = true ]; then
+            print_status "[DRY RUN] Would run 'pip cache purge'"
+        else
+            pip cache purge > /dev/null 2>&1 && print_success "pip cache purged"
+        fi
+        return 0
+    fi
+
+    if [ -d "$TARGET_HOME/.cache/pip" ]; then
+        local size=$(get_size_human "$TARGET_HOME/.cache/pip")
+        local size_bytes=$(du -sb "$TARGET_HOME/.cache/pip" 2>/dev/null | cut -f1)
+        if [ "$DRY_RUN_MODE" = true ]; then
+            print_status "[DRY RUN] Would clean pip cache ($size)"
+        else
+            rm -rf "$TARGET_HOME/.cache/pip"/*
+            track_freed ${size_bytes:-0}
+            print_success "pip cache cleaned ($size)"
+        fi
+    fi
+}
+
+clean_npm_cache() {
+    [ "${CONFIG["enable_npm_cache"]}" != "true" ] && return 0
+    print_header "\n>>> Cleaning npm Cache"
+
+    if command_exists npm; then
+        local npm_cache="$TARGET_HOME/.npm"
+        local size_bytes=0
+        [ -d "$npm_cache" ] && size_bytes=$(du -sb "$npm_cache" 2>/dev/null | cut -f1)
+        if [ "$DRY_RUN_MODE" = true ]; then
+            print_status "[DRY RUN] Would run 'npm cache clean --force'"
+        else
+            npm cache clean --force > /dev/null 2>&1
+            track_freed ${size_bytes:-0}
+            print_success "npm cache cleaned"
+        fi
+    fi
+}
+
 # --- ELECTRON/HEAVY APPS CLEANUP (NEW) ---
 clean_electron_apps() {
-    [ "${CONFIG[enable_electron_apps]}" != "true" ] && return 0
+    [ "${CONFIG["enable_electron_apps"]}" != "true" ] && return 0
     print_header "\n>>> Cleaning Electron & Heavy Apps"
     
     declare -A apps=(
@@ -654,18 +756,18 @@ clean_electron_apps() {
 
 # --- PACMAN ADVANCED CACHE (v3.0) ---
 clean_paccache() {
-    [ "${CONFIG[enable_paccache]}" != "true" ] && return 0
+    [ "${CONFIG["enable_paccache"]}" != "true" ] && return 0
     case $DISTRO in
         "arch"|"manjaro"|"cachyos"|"endeavouros")
-            print_status "Cleaning pacman cache (keeping ${CONFIG[paccache_keep]:-2} versions)..."
+            print_status "Cleaning pacman cache (keeping ${CONFIG["paccache_keep"]:-2} versions)..."
             if command_exists paccache; then
                 local cache_size=$(sudo du -sh /var/cache/pacman/pkg/ 2>/dev/null | cut -f1)
                 local cache_bytes=$(get_size_bytes_sudo /var/cache/pacman/pkg/)
                 if [ "$DRY_RUN_MODE" = true ]; then
-                    print_status "[DRY RUN] Would run paccache -rk${CONFIG[paccache_keep]:-2} ($cache_size)"
+                    print_status "[DRY RUN] Would run paccache -rk${CONFIG["paccache_keep"]:-2} ($cache_size)"
                 else
-                    (sudo paccache -rk${CONFIG[paccache_keep]:-2} > /dev/null 2>&1) &
-                    show_spinner $! "Cleaning pacman cache (keeping ${CONFIG[paccache_keep]:-2} versions)..."
+                    (sudo paccache -rk${CONFIG["paccache_keep"]:-2} > /dev/null 2>&1) &
+                    show_spinner $! "Cleaning pacman cache (keeping ${CONFIG["paccache_keep"]:-2} versions)..."
                     local new_size=$(sudo du -sh /var/cache/pacman/pkg/ 2>/dev/null | cut -f1)
                     local new_bytes=$(get_size_bytes_sudo /var/cache/pacman/pkg/)
                     local freed=$((cache_bytes - new_bytes))
@@ -681,7 +783,7 @@ clean_paccache() {
 
 # --- DEBTAP CACHE (v3.0) ---
 clean_debtap() {
-    [ "${CONFIG[enable_debtap]}" != "true" ] && return 0
+    [ "${CONFIG["enable_debtap"]}" != "true" ] && return 0
     case $DISTRO in
         "arch"|"manjaro"|"cachyos"|"endeavouros")
             if [ -d "/var/cache/debtap" ]; then
@@ -701,7 +803,7 @@ clean_debtap() {
 
 # --- PKGFILE CACHE (v3.0) ---
 clean_pkgfile() {
-    [ "${CONFIG[enable_pkgfile]}" != "true" ] && return 0
+    [ "${CONFIG["enable_pkgfile"]}" != "true" ] && return 0
     case $DISTRO in
         "arch"|"manjaro"|"cachyos"|"endeavouros")
             if [ -d "/var/cache/pkgfile" ]; then
@@ -721,7 +823,7 @@ clean_pkgfile() {
 
 # --- SNAP CLEANUP (v3.0) ---
 clean_snap() {
-    [ "${CONFIG[enable_snap]}" != "true" ] && return 0
+    [ "${CONFIG["enable_snap"]}" != "true" ] && return 0
     command_exists snap || return 0
     print_header "\n>>> Cleaning Snap"
 
@@ -757,7 +859,7 @@ clean_snap() {
 
 # --- FLATPAK CLEANUP (v3.0) ---
 clean_flatpak() {
-    [ "${CONFIG[enable_flatpak]}" != "true" ] && return 0
+    [ "${CONFIG["enable_flatpak"]}" != "true" ] && return 0
     command_exists flatpak || return 0
     print_header "\n>>> Cleaning Flatpak"
 
@@ -778,7 +880,7 @@ clean_flatpak() {
 
 # --- TELEGRAM CACHE (v3.0) ---
 clean_telegram() {
-    [ "${CONFIG[enable_telegram]}" != "true" ] && return 0
+    [ "${CONFIG["enable_telegram"]}" != "true" ] && return 0
     print_header "\n>>> Cleaning Telegram"
 
     local tg_paths=(
@@ -812,7 +914,7 @@ clean_telegram() {
 
 # --- TEMP DIRECTORIES (v3.0) ---
 clean_temp_dirs() {
-    [ "${CONFIG[enable_temp_dirs]}" != "true" ] && return 0
+    [ "${CONFIG["enable_temp_dirs"]}" != "true" ] && return 0
     print_header "\n>>> Cleaning Temp Directories"
 
     local temp_dirs=("/tmp" "/var/tmp")
@@ -835,7 +937,7 @@ clean_temp_dirs() {
 
 # --- CORE DUMPS (v3.0) ---
 clean_coredumps() {
-    [ "${CONFIG[enable_coredumps]}" != "true" ] && return 0
+    [ "${CONFIG["enable_coredumps"]}" != "true" ] && return 0
     print_header "\n>>> Cleaning Core Dumps"
 
     if [ -d "/var/lib/systemd/coredump" ]; then
@@ -870,7 +972,7 @@ clean_coredumps() {
 
 # --- FWUPD CACHE (v3.0) ---
 clean_fwupd() {
-    [ "${CONFIG[enable_fwupd]}" != "true" ] && return 0
+    [ "${CONFIG["enable_fwupd"]}" != "true" ] && return 0
     if [ -d "/var/cache/fwupd" ]; then
         local size=$(sudo du -sh /var/cache/fwupd/ 2>/dev/null | cut -f1)
         local size_bytes=$(sudo du -sb /var/cache/fwupd/ 2>/dev/null | cut -f1)
@@ -888,7 +990,7 @@ clean_fwupd() {
 
 # --- VAR LOG CLEANUP (v3.0) ---
 clean_var_log() {
-    [ "${CONFIG[enable_var_log]}" != "true" ] && return 0
+    [ "${CONFIG["enable_var_log"]}" != "true" ] && return 0
     print_header "\n>>> Cleaning Old Log Files"
 
     if [ "$DRY_RUN_MODE" = true ]; then
@@ -907,7 +1009,7 @@ clean_var_log() {
 
 # --- JS PACKAGE MANAGERS (v3.0) ---
 clean_js_managers() {
-    [ "${CONFIG[enable_js_managers]}" != "true" ] && return 0
+    [ "${CONFIG["enable_js_managers"]}" != "true" ] && return 0
     print_header "\n>>> Cleaning JS Package Managers"
 
     local freed_total=0
@@ -981,7 +1083,7 @@ clean_own_reports() {
 
 # --- KERNEL ASSASSIN (NEW) ---
 clean_old_kernels() {
-    [ "${CONFIG[enable_old_kernels]}" != "true" ] && return 0
+    [ "${CONFIG["enable_old_kernels"]}" != "true" ] && return 0
     print_header "\n>>> Kernel Assassin (Remove Old Kernels)"
     
     local current_kernel=$(uname -r)
@@ -1019,32 +1121,55 @@ clean_old_kernels() {
 # --- STANDARD CLEANUP WRAPPERS ---
 
 clean_package_cache() {
-    [ "${CONFIG[enable_package_cache]}" != "true" ] && return 0
+    [ "${CONFIG["enable_package_cache"]}" != "true" ] && return 0
     print_status "Cleaning package cache..."
-    
-    local cmd=""
+
+    if [ "$DRY_RUN_MODE" = true ]; then
+        print_status "[DRY RUN] Would clean package manager cache for $DISTRO"
+        return 0
+    fi
+
     case $DISTRO in
         "arch"|"manjaro"|"cachyos"|"endeavouros")
+            if [ "${CONFIG["enable_paccache"]}" = "true" ]; then
+                print_verbose "Skipping pacman cache here; handled by paccache step"
+                return 0
+            fi
             if command_exists paccache; then
-                cmd="sudo paccache -rk${CONFIG[paccache_keep]:-2} --noconfirm"
+                (sudo paccache -rk"${CONFIG["paccache_keep"]}" --noconfirm > /dev/null 2>&1) &
             else
-                cmd="sudo pacman -Sc --noconfirm"
+                (sudo pacman -Sc --noconfirm > /dev/null 2>&1) &
+            fi
+            show_spinner $! "Cleaning package cache..."
+            ;;
+        "debian"|"ubuntu"|"linuxmint"|"pop")
+            (sudo apt clean && sudo apt autoclean > /dev/null 2>&1) &
+            show_spinner $! "Cleaning package cache..."
+            ;;
+        "fedora"|"rhel"|"centos"|"almalinux"|"rocky")
+            (sudo dnf clean all > /dev/null 2>&1) &
+            show_spinner $! "Cleaning package cache..."
+            ;;
+        "opensuse-leap"|"opensuse-tumbleweed"|"opensuse")
+            (sudo zypper clean --all > /dev/null 2>&1) &
+            show_spinner $! "Cleaning package cache..."
+            ;;
+        "gentoo")
+            if command_exists eclean; then
+                (sudo eclean-dist -d > /dev/null 2>&1) &
+                show_spinner $! "Cleaning distfiles..."
+            else
+                print_warning "eclean not found; install gentoolkit for Gentoo cache cleanup"
             fi
             ;;
-        "debian"|"ubuntu"|"linuxmint")  cmd="sudo apt clean && sudo apt autoclean" ;; 
-        "fedora"|"rhel"|"centos")       cmd="sudo dnf clean all" ;; 
+        *)
+            print_verbose "Package cache cleanup not implemented for $DISTRO"
+            ;;
     esac
-    
-    if [ -n "$cmd" ]; then
-        if [ "$DRY_RUN_MODE" = true ]; then print_status "[DRY RUN] Would run: $cmd"; else
-            eval "$cmd > /dev/null 2>&1" &
-            show_spinner $! "Cleaning package cache..."
-        fi
-    fi
 }
 
 remove_orphans() {
-    [ "${CONFIG[enable_orphaned_packages]}" != "true" ] && return 0
+    [ "${CONFIG["enable_orphaned_packages"]}" != "true" ] && return 0
     print_status "Checking for orphaned packages..."
     
     case $DISTRO in
@@ -1058,12 +1183,21 @@ remove_orphans() {
                  fi
             fi
             ;; 
-        "debian"|"ubuntu")
+        "debian"|"ubuntu"|"linuxmint"|"pop")
              if [ "$DRY_RUN_MODE" = true ]; then print_status "[DRY RUN] Would run apt autoremove"; else
                 sudo apt autoremove -y > /dev/null 2>&1
                 print_success "Auto-remove completed"
              fi
-             ;; 
+             ;;
+        "fedora"|"rhel"|"centos"|"almalinux"|"rocky")
+             if [ "$DRY_RUN_MODE" = true ]; then print_status "[DRY RUN] Would run dnf autoremove"; else
+                sudo dnf autoremove -y > /dev/null 2>&1
+                print_success "Auto-remove completed"
+             fi
+             ;;
+        "opensuse-leap"|"opensuse-tumbleweed"|"opensuse")
+             print_verbose "Orphaned package removal is not automated for openSUSE"
+             ;;
     esac
 }
 
@@ -1094,7 +1228,7 @@ detect_container_runtime() {
 }
 
 clean_docker_enhanced() {
-    [ "${CONFIG[enable_docker_cleanup]}" != "true" ] && return 0
+    [ "${CONFIG["enable_docker_cleanup"]}" != "true" ] && return 0
     
     # Detect runtime
     detect_container_runtime
@@ -1108,7 +1242,7 @@ clean_docker_enhanced() {
     
     if [ "$DRY_RUN_MODE" = true ]; then
         print_status "[DRY RUN] Would prune $CONTAINER_RUNTIME system"
-        [ "${CONFIG[enable_docker_volumes]}" = "true" ] && print_status "[DRY RUN] Would prune volumes (Aggressive)"
+        [ "${CONFIG["enable_docker_volumes"]}" = "true" ] && print_status "[DRY RUN] Would prune volumes (Aggressive)"
         return 0
     fi
     
@@ -1117,7 +1251,7 @@ clean_docker_enhanced() {
         print_success "$CONTAINER_RUNTIME system pruned"
     fi
     
-    if [ "${CONFIG[enable_docker_volumes]}" = "true" ]; then
+    if [ "${CONFIG["enable_docker_volumes"]}" = "true" ]; then
         print_warning "Volume pruning deletes ALL unused volumes. Database data might be lost."
         if ask_yes_no "Prune unused $CONTAINER_RUNTIME VOLUMES?" "$docker_default"; then
             $CONTAINER_RUNTIME volume prune -f > /dev/null 2>&1
@@ -1128,7 +1262,13 @@ clean_docker_enhanced() {
 
 clean_common_caches() {
     local freed_total=0
-    if [ "${CONFIG[enable_user_cache]}" = "true" ]; then
+
+    if [ "$DRY_RUN_MODE" = true ]; then
+        print_status "[DRY RUN] Would clean user cache, thumbnails, and trash for $TARGET_USER"
+        return 0
+    fi
+
+    if [ "${CONFIG["enable_user_cache"]}" = "true" ]; then
         local cache_bytes=$(du -sb "$TARGET_HOME/.cache" 2>/dev/null | cut -f1)
         local exclude_args=()
         for dir in "${PROTECTED_CACHE_DIRS[@]}"; do
@@ -1138,14 +1278,14 @@ clean_common_caches() {
         local new_bytes=$(du -sb "$TARGET_HOME/.cache" 2>/dev/null | cut -f1)
         freed_total=$((freed_total + ${cache_bytes:-0} - ${new_bytes:-0}))
     fi
-    if [ "${CONFIG[enable_thumbnails]}" = "true" ]; then
+    if [ "${CONFIG["enable_thumbnails"]}" = "true" ]; then
         local thumb_bytes=0
         [ -d "$TARGET_HOME/.thumbnails" ] && thumb_bytes=$(du -sb "$TARGET_HOME/.thumbnails" 2>/dev/null | cut -f1)
         [ -d "$TARGET_HOME/.cache/thumbnails" ] && thumb_bytes=$((thumb_bytes + $(du -sb "$TARGET_HOME/.cache/thumbnails" 2>/dev/null | cut -f1)))
         rm -rf "$TARGET_HOME/.thumbnails/"* "$TARGET_HOME/.cache/thumbnails/"* 2>/dev/null
         freed_total=$((freed_total + ${thumb_bytes:-0}))
     fi
-    if [ "${CONFIG[enable_trash]}" = "true" ]; then
+    if [ "${CONFIG["enable_trash"]}" = "true" ]; then
         local trash_bytes=$(du -sb "$TARGET_HOME/.local/share/Trash/" 2>/dev/null | cut -f1)
         rm -rf "$TARGET_HOME/.local/share/Trash/"* 2>/dev/null
         freed_total=$((freed_total + ${trash_bytes:-0}))
@@ -1158,8 +1298,7 @@ clean_common_caches() {
 # EXECUTION FLOW
 ################################################################################
 
-run_cleanup_logic() {
-    # 1. System/Admin tasks (Sequential)
+run_system_cleanup_logic() {
     clean_package_cache
     clean_paccache
     clean_debtap
@@ -1173,39 +1312,33 @@ run_cleanup_logic() {
     clean_var_log
     clean_coredumps
     clean_temp_dirs
-    
-    # 2. User Level tasks (Can be Parallel)
-    print_status "Running user-level cleanup tasks..."
-    
-    if [ "$PARALLEL_EXECUTION" = true ] && [ "$INTERACTIVE_MODE" = false ]; then
-        clean_common_caches &
-        local pid_common=$!
-        clean_electron_apps &
-        local pid_electron=$!
-        clean_dev_tools &
-        local pid_dev=$!
-        clean_telegram &
-        local pid_telegram=$!
-        clean_js_managers &
-        local pid_js=$!
-        
-        wait $pid_common $pid_electron $pid_dev $pid_telegram $pid_js
-    else
-        clean_common_caches
-        clean_electron_apps
-        clean_dev_tools
-        clean_telegram
-        clean_js_managers
-    fi
-    
-    # 3. Logs
-    if [ "${CONFIG[enable_journal_cleanup]}" = "true" ]; then
-        if [ "$DRY_RUN_MODE" = true ]; then print_status "[DRY RUN] Vacuum journal"; else
-            sudo journalctl --vacuum-time="${CONFIG[journal_retention]}" > /dev/null 2>&1
+
+    if [ "${CONFIG["enable_journal_cleanup"]}" = "true" ]; then
+        if [ "$DRY_RUN_MODE" = true ]; then
+            print_status "[DRY RUN] Vacuum journal"
+        else
+            sudo journalctl --vacuum-time="${CONFIG["journal_retention"]}" > /dev/null 2>&1
         fi
     fi
-    
-    # 4. Self-maintenance
+}
+
+run_user_cleanup_logic() {
+    clean_browser_cache
+    clean_pip_cache
+    clean_npm_cache
+    clean_common_caches
+    clean_electron_apps
+    clean_dev_tools
+    clean_telegram
+    clean_js_managers
+}
+
+run_cleanup_logic() {
+    run_system_cleanup_logic
+
+    print_status "Running user-level cleanup tasks..."
+    run_user_cleanup_logic
+
     clean_own_reports
 }
 
@@ -1280,14 +1413,18 @@ EOF
 parse_arguments() {
     while [[ $# -gt 0 ]]; do
         case $1 in
-            --safe) CLEANUP_LEVEL="safe"; shift ;; 
-            --standard) CLEANUP_LEVEL="standard"; shift ;; 
-            --aggressive) CLEANUP_LEVEL="aggressive"; shift ;; 
-            -i|--interactive) INTERACTIVE_MODE=true; shift ;; 
-            -y|--yes) INTERACTIVE_MODE=false; shift ;; 
-            -d|--dry-run) DRY_RUN_MODE=true; shift ;; 
-            --no-backup) ENABLE_BACKUP=false; shift ;; 
+            --safe) CLEANUP_LEVEL="safe"; shift ;;
+            --standard) CLEANUP_LEVEL="standard"; shift ;;
+            --aggressive) CLEANUP_LEVEL="aggressive"; shift ;;
+            -i|--interactive) INTERACTIVE_MODE=true; AUTO_YES=false; shift ;;
+            -y|--yes) AUTO_YES=true; INTERACTIVE_MODE=false; shift ;;
+            -d|--dry-run) DRY_RUN_MODE=true; shift ;;
+            --no-backup) ENABLE_BACKUP=false; shift ;;
             -u|--user)
+                if [ -z "${2:-}" ]; then
+                    print_error "--user requires an argument"
+                    exit 1
+                fi
                 TARGET_USER="$2"
                 shift 2
                 ;;
@@ -1295,8 +1432,15 @@ parse_arguments() {
                 ALL_USERS_MODE=true
                 shift
                 ;;
-            -h|--help) show_help; exit 0 ;; 
-            *) shift ;; 
+            --version)
+                echo "${SCRIPT_NAME} v${SCRIPT_VERSION}"
+                exit 0
+                ;;
+            -h|--help) show_help; exit 0 ;;
+            *)
+                print_warning "Unknown option: $1"
+                shift
+                ;;
         esac
     done
 }
@@ -1314,12 +1458,41 @@ main() {
     
     # Handle --all-users mode
     if [ "$ALL_USERS_MODE" = true ]; then
+        CONFIG_DIR="$TARGET_HOME/.config/system-cleanup"
+        CONFIG_FILE="$CONFIG_DIR/config.conf"
+        LOG_DIR="$CONFIG_DIR/logs"
+        BACKUP_DIR="$CONFIG_DIR/backups"
+        REPORT_DIR="$CONFIG_DIR/reports"
+
+        initialize_directories
+        configure_cleanup_level
+        load_config
+
+        print_header "╔═══════════════════════════════════════════════════════════════╗"
+        print_header "║   System Cleanup Enhanced v${SCRIPT_VERSION} - All Users Mode            ║"
+        print_header "╚═══════════════════════════════════════════════════════════════╝"
+        echo
+
         if [ "$DRY_RUN_MODE" = true ]; then
-            print_warning "DRY RUN - Preview only (use -y to run without prompts)"
+            print_warning "DRY RUN ACTIVE"
+        elif [ "$CLEANUP_LEVEL" != "safe" ]; then
+            sudo -v || { print_error "Sudo required for this mode."; exit 1; }
         fi
+
         detect_distro
+        initialize_stats
+        create_backup
+
+        run_system_cleanup_logic
         process_all_users
-        print_success "All users processing completed!"
+
+        save_config
+        update_stats
+        echo
+        print_header "═════════════════════════════════════════════════════════════════"
+        echo -e "${BOLD}${YELLOW}Space Freed:${NC} ${GREEN}$(bytes_to_human $SPACE_FREED)${NC}"
+        echo "Report saved to: $REPORT_DIR"
+        generate_html_report
         return 0
     fi
     
@@ -1332,8 +1505,8 @@ main() {
     
     # Initialize
     initialize_directories
-    load_config
     configure_cleanup_level
+    load_config
     
     # Header
     print_header "╔═══════════════════════════════════════════════════════════════╗"
@@ -1377,7 +1550,9 @@ generate_html_report() {
     if [ -d "$TARGET_HOME/.cache" ]; then
         user_cache_size=$(du -sh "$TARGET_HOME/.cache/" 2>/dev/null | cut -f1)
     fi
-    local journal_size=$(sudo journalctl --disk-usage 2>/dev/null | grep -oP '[\d.]+[KMGT]' || echo "0")
+    local journal_size
+    journal_size=$(sudo journalctl --disk-usage 2>/dev/null | awk '{print $NF}' | head -1)
+    journal_size=${journal_size:-N/A}
     local pacman_cache_size="N/A"
     if [ -d "/var/cache/pacman/pkg" ]; then
         pacman_cache_size=$(sudo du -sh /var/cache/pacman/pkg/ 2>/dev/null | cut -f1)
@@ -1577,21 +1752,36 @@ generate_html_report() {
 </html>
 HTMLEOF
 
-    # Replace variables
-    sed -i "s|SCRIPT_VERSION|${SCRIPT_VERSION}|g" "$report_file"
-    sed -i "s|TIMESTAMP|${timestamp}|g" "$report_file"
-    sed -i "s|SPACE_FREED|${space_freed_display}|g" "$report_file"
-    sed -i "s|MODE_UPPER|${CLEANUP_LEVEL^^}|g" "$report_file"
-    sed -i "s|MODE|${CLEANUP_LEVEL}|g" "$report_file"
-    sed -i "s|DISTRO|${DISTRO_NAME:-Unknown}|g" "$report_file"
-    sed -i "s|USER_CACHE_SIZE|${user_cache_size:-N/A}|g" "$report_file"
-    sed -i "s|PKG_CACHE_SIZE|${pacman_cache_size:-N/A}|g" "$report_file"
-    sed -i "s|THUMB_SIZE|${thumb_size:-N/A}|g" "$report_file"
-    sed -i "s|TRASH_SIZE|${trash_size:-N/A}|g" "$report_file"
+    # Replace variables (escape user-controlled values for sed)
+    local esc_version esc_timestamp esc_space esc_mode esc_mode_upper esc_distro
+    local esc_user_cache esc_pkg_cache esc_thumb esc_trash
+    esc_version=$(escape_for_sed "$SCRIPT_VERSION")
+    esc_timestamp=$(escape_for_sed "$timestamp")
+    esc_space=$(escape_for_sed "$space_freed_display")
+    esc_mode=$(escape_for_sed "$CLEANUP_LEVEL")
+    esc_mode_upper=$(escape_for_sed "${CLEANUP_LEVEL^^}")
+    esc_distro=$(escape_for_sed "${DISTRO_NAME:-Unknown}")
+    esc_user_cache=$(escape_for_sed "${user_cache_size:-N/A}")
+    esc_pkg_cache=$(escape_for_sed "${pacman_cache_size:-N/A}")
+    esc_thumb=$(escape_for_sed "${thumb_size:-N/A}")
+    esc_trash=$(escape_for_sed "${trash_size:-N/A}")
+
+    sed -i "s|SCRIPT_VERSION|${esc_version}|g" "$report_file"
+    sed -i "s|TIMESTAMP|${esc_timestamp}|g" "$report_file"
+    sed -i "s|SPACE_FREED|${esc_space}|g" "$report_file"
+    sed -i "s|MODE_UPPER|${esc_mode_upper}|g" "$report_file"
+    sed -i "s|MODE|${esc_mode}|g" "$report_file"
+    sed -i "s|DISTRO|${esc_distro}|g" "$report_file"
+    sed -i "s|USER_CACHE_SIZE|${esc_user_cache}|g" "$report_file"
+    sed -i "s|PKG_CACHE_SIZE|${esc_pkg_cache}|g" "$report_file"
+    sed -i "s|THUMB_SIZE|${esc_thumb}|g" "$report_file"
+    sed -i "s|TRASH_SIZE|${esc_trash}|g" "$report_file"
     sed -i "s|50%|${pct}%|g" "$report_file"
     sed -i "s|stroke-dashoffset=\"220\"|stroke-dashoffset=\"${dashoffset}\"|g" "$report_file"
     
     print_success "HTML Report generated: $report_file"
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

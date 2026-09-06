@@ -1,223 +1,188 @@
 ![LinuxJanitor Banner](https://raw.githubusercontent.com/ind4skylivey/LinuxJanitor/main/assets/janitorlinux!%20v2.png)
 
-# 🧹 LinuxJanitor
+# LinuxJanitor
 
-### Because your disk space is precious (and `node_modules` is a black hole).
+**Version 3.0** — Automated system cleanup for Linux, with multi-distro support and configurable cleanup levels.
 
-**LinuxJanitor** is the Bash script your grandmother warned you about. It's an automated, multi-distro cleaning utility that goes into the dark corners of your filesystem and kicks out the dust bunnies (and the 40GB of Docker images you haven't used since 2021).
+LinuxJanitor is a Bash utility that consolidates routine maintenance tasks—package manager caches, user caches, container images, journal logs, and development tool artifacts—into a single, repeatable workflow. It supports interactive menus, non-interactive automation, dry runs, and per-user or system-wide cleanup.
 
-> **Current Version:** 3.0 "Power User Edition" ⚡
+## Features
 
----
+- **Three cleanup levels** — Safe, Standard (default), and Aggressive, each with distinct scope and risk profile
+- **Multi-distro support** — Automatic detection for Arch, Debian, Fedora/RHEL, openSUSE, and Gentoo families
+- **Interactive or scripted** — Menu-driven UI, CLI flags, and cron-friendly non-interactive mode
+- **Dry run** — Preview actions and estimated space savings before making changes
+- **HTML reports** — Post-run summaries with space freed, mode, and cleanup breakdown
+- **Persistent configuration** — Settings saved to `~/.config/system-cleanup/config.conf`
+- **Multi-user administration** — Target a specific user or clean all regular users on the system
+- **Container runtime support** — Docker and Podman pruning in aggressive mode
+- **Browser, pip, and npm caches** — Targeted cleanup via dedicated config toggles
+- **Protected paths** — Editor, terminal, and font caches are never removed
 
-## 🧐 Why?
+## Supported distributions
 
-Because manual cleanup is for people with too much free time.
-I got tired of running `pacman -Sc`, `docker system prune`, and deleting `~/.cache` manually every week. So I wrote a script that does it all, looks cool while doing it (spinners! progress bars!), and supports pretty much every major distro.
+| Family | Examples |
+|--------|----------|
+| Arch-based | Arch Linux, Manjaro, CachyOS, EndeavourOS |
+| Debian-based | Debian, Ubuntu, Linux Mint, Pop!_OS |
+| RHEL-based | Fedora, RHEL, CentOS, Rocky Linux, AlmaLinux |
+| SUSE-based | openSUSE Leap, Tumbleweed |
+| Other | Gentoo |
 
-**Supported Distros:**
-- 🏹 Arch Linux (Manjaro, Endeavour, etc.) - *I use Arch btw.*
-- 🌀 Debian / Ubuntu / Mint / Pop!_OS
-- 🎩 Fedora / RHEL / CentOS
-- 🦎 openSUSE
-- Gentoo (if you are compiling this README, hi).
+## Cleanup modes
 
----
+### Safe (`--safe`)
 
-## 🔥 The "Choose Your Violence" Modes
+Low-risk maintenance. Removes temporary and regenerable caches only.
 
-We have 3 levels of aggressiveness, because sometimes you just want to tidy up, and sometimes you want to nuke everything from orbit.
+- Browser caches, thumbnails, and temp files
+- Suitable for conservative or first-time use
 
-### 1. 🛡️ `--safe` (The "I have trust issues" mode)
-Runs with safety scissors. Only touches temporary caches that are guaranteed to regenerate.
-- Cleans: Browser caches, Thumbnails, Temp files.
-- **Risk Level:** 0/10. Safe for your grandma's laptop.
+### Standard (`--standard`)
 
-### 2. 🧹 `--standard` (The "Regular human" mode)
-**Default.** The sweet spot. Cleans what needs to be cleaned without breaking your dev environment.
-- Cleans: Everything in Safe + Package Manager Cache (apt/pacman/dnf), Trash, Journal logs (keeps last 2 weeks), Snap, Flatpak, Telegram, JS managers, paccache, debtap, coredumps, fwupd, /tmp.
-- **Risk Level:** 2/10. Standard maintenance.
+Default mode. Balances disk recovery with everyday development workflows.
 
-### 3. 💀 `--aggressive` (The "I choose violence" mode)
-**WARNING:** This mode wakes up and chooses chaos. Ideally for Power Users who know what `git clone` means.
-- **Dev Junk:** Nukes `node_modules` caches, Cargo registry (Rust), Go mod cache, Gradle/Maven. **(You will have to re-download deps!)**
-- **Docker:** Prunes images AND **Volumes** (optional confirmation).
-- **Kernel Assassin:** Hunts down old kernels and removes them (Debian/Fedora).
-- **Electron Bloat:** Cleans heavy caches from Discord, Slack, Spotify, VS Code workspace history.
-- **/var/log:** Removes old compressed and rotated log files, truncates large logs.
-- **Debtap & pkgfile:** Cleans Arch-specific conversion and file search caches.
-- **Risk Level:** 8/10. Don't come crying if you have to re-download the internet.
+- Everything in Safe mode
+- Package manager cache (apt, pacman, dnf, and related tools)
+- Trash, journal logs (retains the last two weeks by default)
+- Snap, Flatpak, Telegram, JavaScript package managers (pnpm, yarn, bun)
+- paccache, debtap, pkgfile (Arch), coredumps, fwupd, `/tmp` and `/var/tmp`
 
----
+### Aggressive (`--aggressive`)
 
-## 🚀 Usage
+Extended cleanup for experienced users. May require re-downloading dependencies or data.
 
-### ⚡ One-Command Install (The "I'm lazy" method)
-Download, install to `~/.local/bin`, and make it executable automatically:
+- Everything in Standard mode
+- Development caches: npm, Cargo, Go modules, Gradle, Maven
+- Docker/Podman images and optional volume pruning
+- Old kernel removal (Debian/Fedora families)
+- Electron app caches (Discord, Slack, Spotify, VS Code workspace history)
+- `/var/log` — removes old compressed and rotated logs; truncates large log files
+- debtap and pkgfile caches (Arch)
+
+> **Recommendation:** Run with `--dry-run` before using aggressive mode on a new system.
+
+## Installation
+
+### Quick install
+
+Downloads the script to `~/.local/bin` and sets executable permissions:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ind4skylivey/LinuxJanitor/main/install.sh | bash
 ```
 
-Then you can just run it from anywhere:
+Ensure `~/.local/bin` is on your `PATH`:
+
 ```bash
-system-cleanup-enhanced.sh
+export PATH="$PATH:$HOME/.local/bin"
 ```
-*(Running it without arguments opens the Interactive Menu)*
 
-### 🐢 Manual Install
-Old school? I respect that.
+### Manual install
 
 ```bash
-# 1. Download the script (or clone this repo)
 git clone https://github.com/ind4skylivey/LinuxJanitor.git
 cd LinuxJanitor
-
-# 2. Give it power
 chmod +x system-cleanup-enhanced.sh
-
-# 3. RUN IT (Opens Menu)
 ./system-cleanup-enhanced.sh
 ```
 
-### 🤖 CLI Arguments (For Automation & Speed)
-Skip the menu and just get things done:
+## Usage
 
-| Flag | What it does |
-|------|--------------|
-| `--safe` | **The boring mode.** See above. |
-| `--standard` | **The default.** Standard cleanup. |
-| `--aggressive` | **The fun mode.** See above. |
-| `-i` | **Interactive Steps.** Asks for permission before *every* single step. |
-| `-y` | **Yes Mode.** Automatic mode. Great for cron jobs. |
-| `-d` | **Dry Run.** Pretend to clean. See how much space you *would* save. |
-| `-u, --user USER` | Run cleanup for a specific user (useful for system admins). |
-| `-a, --all-users` | Clean ALL users on the system (asks confirmation per user). |
-
----
-
-## 🛠️ Configuration
-
-The script creates a config file at `~/.config/system-cleanup/config.conf`.
-You can edit it manually if you want to permanently enable the "Kernel Assassin" or disable "Browser Cleanup" because you like keeping 4GB of cookies.
-
----
-
-## 👤 Running for Other Users
-
-You can clean up other users' caches without switching accounts:
+Running without arguments opens the interactive menu.
 
 ```bash
-# Clean another user's cache
-./system-cleanup-enhanced.sh --user john --standard
-
-# Clean root's cache (if you dare)
-sudo ./system-cleanup-enhanced.sh --user root --aggressive
-
-# Dry run for another user
-./system-cleanup-enhanced.sh -u mary --dry-run
-
-# Clean ALL users on the system (v2.7)
-./system-cleanup-enhanced.sh --all-users
+system-cleanup-enhanced.sh
 ```
 
----
+### CLI reference
 
-## 🔥 v3.0 New Features
+| Flag | Description |
+|------|-------------|
+| `--safe` | Safe cleanup only |
+| `--standard` | Standard cleanup (default) |
+| `--aggressive` | Extended cleanup including dev and container artifacts |
+| `-i`, `--interactive` | Confirm before each major step |
+| `-y`, `--yes` | Non-interactive mode (suitable for automation) |
+| `-d`, `--dry-run` | Preview actions without deleting files |
+| `--no-backup` | Skip backup generation |
+| `-u`, `--user USER` | Run cleanup for a specific user |
+| `-a`, `--all-users` | Clean all regular users on the system |
+| `-h`, `--help` | Show help |
+| `--version` | Show version |
 
-### 📦 Snap & Flatpak Cleanup
-- Removes snap download cache and disabled snap revisions
-- Cleans unused Flatpak runtimes and apps via `flatpak uninstall --unused`
+### Examples
 
-### 💬 Telegram Cache Cleanup
-- Cleans Telegram Desktop cache, emoji, media cache, and temp files
-- Located at `~/.local/share/TelegramDesktop/tdata/`
-
-### 💥 Core Dump & Crash Report Cleanup
-- Removes systemd coredumps from `/var/lib/systemd/coredump`
-- Cleans Ubuntu/Debian apport crash reports from `/var/crash`
-
-### 📋 /var/log Old File Cleanup (Aggressive only)
-- Removes compressed `.gz` and `.old` log files older than 7 days
-- Removes rotated log files (`*.1`, `*.2`, etc.) older than 7 days
-- Truncates large log files (>50MB) instead of deleting
-
-### 🗂️ /tmp & /var/tmp Cleanup
-- Cleans temp files older than 1 day (safe for running processes)
-
-### 🟢 pnpm/yarn/bun Cache Cleanup
-- `pnpm store prune` for pnpm store
-- `yarn cache clean` for yarn cache
-- `bun pm cache rm` for bun install cache
-
-### 🏗️ Debtap & pkgfile Cache (Arch only)
-- Cleans `/var/cache/debtap/` for debtap users
-- Cleans `/var/cache/pkgfile/` for pkgfile users
-
-### ⚡ paccache Support (Smart Pacman Cache)
-- Uses `paccache` (from pacman-contrib) instead of `pacman -Sc` when available
-- Configurable: keeps N versions (default: 2) via `paccache_keep` config
-- Shows before/after cache size comparison
-
-### 🔧 fwupd Cache Cleanup
-- Cleans `/var/cache/fwupd/` firmware update cache
-
-### 💾 Config Persistence
-- Settings are automatically saved to disk after each run
-- Loaded on next run — your preferences survive across sessions
-- Config file: `~/.config/system-cleanup/config.conf`
-
-### 🧹 Self-Maintenance
-- Automatically cleans old HTML reports (>30 days)
-- Cleans old log files (>30 days)
-- Cleans old backup files (>90 days)
-
-### 📊 Improved HTML Report
-- Real data instead of placeholder values
-- Dynamic donut chart percentage based on actual space freed vs disk size
-- Accurate cache size reporting in details table
-
----
-
-## 🔥 v2.7 New Features
-
-### 📄 HTML Report
-Generate beautiful HTML reports after cleanup:
-- Visual dashboard with charts and icons
-- Space freed, mode, distro summary
-- Cleanup details breakdown
-- Reports saved to `~/.config/system-cleanup/reports/`
-
-### 👥 --all-users Mode (v2.7)
-Clean all users on the system with confirmation per user:
 ```bash
-./system-cleanup-enhanced.sh --all-users         # Interactive
-./system-cleanup-enhanced.sh -a --dry-run        # Preview only
-./system-cleanup-enhanced.sh -a -y               # Auto confirm all
+# Standard cleanup with confirmation at each step
+system-cleanup-enhanced.sh --standard -i
+
+# Aggressive cleanup, fully automated
+system-cleanup-enhanced.sh --aggressive -y
+
+# Preview aggressive cleanup without making changes
+system-cleanup-enhanced.sh --aggressive --dry-run
+
+# Clean another user's caches
+system-cleanup-enhanced.sh --user john --standard
+
+# Clean all users (interactive confirmation per user)
+system-cleanup-enhanced.sh --all-users
+
+# Preview cleanup for all users
+system-cleanup-enhanced.sh --all-users --dry-run
 ```
-- Excludes system users (root, daemon, mysql, etc.)
-- Asks confirmation for each user before cleaning
 
-### 🐳 Podman Support (v2.7)
-Now supports both Podman and Docker:
-- Auto-detects available container runtime
-- If both detected, asks which to use
-- Works seamlessly with `--aggressive` mode
+When using `--user`, the script runs with your current permissions. Use `sudo` if you need access to another user's files.
 
-**How it works:**
-- Uses `getent passwd` to resolve the correct home directory
-- All user-specific paths (`.cache`, `.config`, etc.) are automatically redirected
-- Perfect for system admins managing multiple accounts
+## Configuration
 
-**Note:** When using `--user`, the script runs with YOUR permissions. Use `sudo` if you need to access other users' files.
+On first run, LinuxJanitor creates a configuration file at:
 
----
+```
+~/.config/system-cleanup/config.conf
+```
 
-## ⚠️ Disclaimer
+You can enable or disable individual cleanup categories (browser cache, Docker, old kernels, Snap, Flatpak, and others) and adjust settings such as journal retention and paccache keep count. Changes persist across sessions.
 
-**I am not responsible if this script deletes your homework, your Bitcoin wallet, or your cat.**
-I have tested this on my machines, but `rm -rf` is a powerful spell. Use `--dry-run` first if you are nervous.
+HTML reports are written to `~/.config/system-cleanup/reports/`. The script automatically removes reports, logs, and backups older than 30–90 days.
 
----
+## Multi-user mode
 
-**Made with 💻 and ☕ by [iL1v3y](https://github.com/ind4skylivey)**
+`--all-users` iterates over regular system accounts (excluding service users such as `root`, `daemon`, and `mysql`), prompting for confirmation before cleaning each user unless `-y` is set.
+
+```bash
+system-cleanup-enhanced.sh --all-users         # Interactive
+system-cleanup-enhanced.sh -a --dry-run        # Preview only
+system-cleanup-enhanced.sh -a -y               # Auto-confirm all users
+```
+
+User home directories are resolved via `getent passwd`, so user-specific paths (`.cache`, `.config`, and similar) are handled correctly.
+
+## Safety
+
+- Use `--dry-run` to review planned actions before running cleanup.
+- Aggressive mode can remove development dependencies, container volumes, and old kernels.
+- Protected cache directories (Neovim, Helix, Kitty, fontconfig, and others) are never deleted.
+- The authors provide this tool as-is. Test on non-critical systems first and maintain backups of important data.
+
+## Testing
+
+LinuxJanitor uses [bats-core](https://github.com/bats-core/bats-core) for automated tests.
+
+```bash
+chmod +x scripts/run-tests.sh
+./scripts/run-tests.sh
+```
+
+The runner uses a system-installed `bats` when available, or vendors bats-core into `tests/.deps/` on first run.
+
+CI runs the same suite on every push and pull request via [`.github/workflows/test.yml`](.github/workflows/test.yml).
+
+## License
+
+MIT License. See the script header for details.
+
+## Author
+
+Maintained by [iL1v3y](https://github.com/ind4skylivey).
