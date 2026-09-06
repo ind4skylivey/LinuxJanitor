@@ -150,10 +150,10 @@ sleep 0.3
 # 6. Path Check
 echo ""
 echo -e "${ICON_ACTION} Analyzing system PATH..."
-if [[ ":$PATH:" != ".*:$INSTALL_DIR:*" ]]; then
+if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
     echo -e "    ${ICON_WARN} ${YELLOW}Notice:${NC} ${WHITE}$INSTALL_DIR${NC} is not in your PATH."
     echo -e "    To run 'system-cleanup-enhanced.sh' from anywhere, add this to your shell config:"
-    echo -e "    ${CYAN}export PATH=\"PATH:$INSTALL_DIR\"${NC}"
+    echo -e "    ${CYAN}export PATH=\"\$PATH:$INSTALL_DIR\"${NC}"
 else
     echo -e "    ${ICON_OK} System PATH is correctly configured."
 fi
@@ -169,8 +169,8 @@ echo -e "  ${B_WHITE}Location:${NC} ${WHITE}$INSTALL_PATH${NC}"
 echo ""
 echo -e "${CYAN}USAGE EXAMPLES:${NC}"
 echo -e "  ${WHITE}Run Interactive:${NC}    $SCRIPT_NAME -i"
-echo -e "  ${WHITE}Run Aggressive:${NC}     $SCRIPT_NAME --aggressive"
-echo -e "  ${WHITE}Setup Auto-Clean:${NC}   $SCRIPT_NAME --generate-timer"
+echo -e "  ${WHITE}Run Aggressive:${NC}     $SCRIPT_NAME --aggressive -y"
+echo -e "  ${WHITE}Dry Run:${NC}            $SCRIPT_NAME --dry-run"
 echo ""
 echo -e "${B_CYAN}Keep it clean, user.${NC}"
 echo ""
